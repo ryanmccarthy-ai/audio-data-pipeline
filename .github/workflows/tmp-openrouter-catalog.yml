@@ -1,0 +1,46 @@
+name: Temporary OpenRouter Catalog Export
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build newest-first CSV
+        run: |
+          python - <<'PY'
+          import csv, datetime as dt, json, urllib.request
+          from pathlib import Path
+          with urllib.request.urlopen('https://openrouter.ai/api/v1/models', timeout=60) as r:
+              models=json.load(r)['data']
+          models.sort(key=lambda x: x.get('created') or 0, reverse=True)
+          parents={'ai21':'AI21 Labs','aion-labs':'Aion Labs','allenai':'Allen Institute for AI','amazon':'Amazon Web Services (Amazon.com, Inc.)','anthracite-org':'Anthracite','anthropic':'Anthropic PBC','arcee-ai':'Arcee AI','baidu':'Baidu, Inc.','bytedance':'ByteDance Ltd.','bytedance-seed':'ByteDance Ltd.','cognitivecomputations':'Cognitive Computations','cohere':'Cohere Inc.','deepseek':'DeepSeek','google':'Google LLC (Alphabet Inc.)','google-deepmind':'Google DeepMind (Alphabet Inc.)','inception':'Inception Labs','inflection':'Inflection AI','liquid':'Liquid AI','meta-llama':'Meta Platforms, Inc.','microsoft':'Microsoft Corporation','minimax':'MiniMax','mistralai':'Mistral AI','moonshotai':'Moonshot AI','nousresearch':'Nous Research','nvidia':'NVIDIA Corporation','openai':'OpenAI','perplexity':'Perplexity AI','qwen':'Alibaba Cloud (Alibaba Group)','rekaai':'Reka AI','stepfun':'StepFun','tngtech':'TNG Technology Consulting','x-ai':'xAI','~x-ai':'xAI','z-ai':'Z.ai / Zhipu AI'}
+          def pm(v): return '' if v in (None,'') else float(v)*1_000_000
+          rows=[]
+          token_keys={'prompt','completion','input_cache_read','input_cache_write','input_cache_write_1h'}
+          for m in models:
+              p=m.get('pricing') or {}; other=[]
+              for k,v in p.items():
+                  if k in token_keys or v in (None,''): continue
+                  unit='request' if k in ('request','web_search') else ('image' if 'image' in k else 'native unit')
+                  other.append(f"{k.replace('_',' ')}: ${float(v):g}/{unit}")
+              provider=(m.get('id') or '').split('/',1)[0]
+              d=dt.datetime.fromtimestamp(m['created'],tz=dt.timezone.utc).date().isoformat() if m.get('created') else ''
+              rows.append({'Model Name':m.get('name',''),'OpenRouter Added Date':d,'Parent Company / Developer':parents.get(provider,''),'Input ($ / 1M tokens)':pm(p.get('prompt')),'Output ($ / 1M tokens)':pm(p.get('completion')),'Cache Read ($ / 1M tokens)':pm(p.get('input_cache_read')),'Cache Write ($ / 1M tokens)':pm(p.get('input_cache_write')),'Cache Write 1h ($ / 1M tokens)':pm(p.get('input_cache_write_1h')),'Other Pricing':'; '.join(other)})
+          with Path('openrouter_model_catalog_2026-08-05.csv').open('w',newline='',encoding='utf-8-sig') as f:
+              w=csv.DictWriter(f,fieldnames=list(rows[0])); w.writeheader(); w.writerows(rows)
+          print(len(rows))
+          PY
+      - name: Commit CSV
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add openrouter_model_catalog_2026-08-05.csv
+          git commit -m 'chore: add temporary OpenRouter catalog CSV' || exit 0
+          git push
