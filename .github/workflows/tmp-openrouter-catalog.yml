@@ -1,0 +1,98 @@
+name: Temporary OpenRouter Catalog Export
+
+on:
+  push:
+    branches:
+      - tmp/openrouter-catalog-20260805
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: tmp/openrouter-catalog-20260805
+      - name: Build newest-first CSV
+        run: |
+          python - <<'PY'
+          import csv, datetime as dt, json, urllib.request
+          from pathlib import Path
+
+          with urllib.request.urlopen('https://openrouter.ai/api/v1/models', timeout=60) as r:
+              payload = json.load(r)
+          models = payload['data']
+          models.sort(key=lambda x: x.get('created') or 0, reverse=True)
+
+          parents = {
+              'ai21':'AI21 Labs', 'aion-labs':'Aion Labs', 'allenai':'Allen Institute for AI',
+              'amazon':'Amazon Web Services (Amazon.com, Inc.)', 'anthracite-org':'Anthracite',
+              'anthropic':'Anthropic PBC', 'arcee-ai':'Arcee AI', 'baidu':'Baidu, Inc.',
+              'bytedance':'ByteDance Ltd.', 'bytedance-seed':'ByteDance Ltd.',
+              'cognitivecomputations':'Cognitive Computations', 'cohere':'Cohere Inc.',
+              'deepseek':'DeepSeek', 'google':'Google LLC (Alphabet Inc.)',
+              'google-deepmind':'Google DeepMind (Alphabet Inc.)', 'inception':'Inception Labs',
+              'inflection':'Inflection AI', 'liquid':'Liquid AI', 'meta-llama':'Meta Platforms, Inc.',
+              'microsoft':'Microsoft Corporation', 'minimax':'MiniMax', 'mistralai':'Mistral AI',
+              'moonshotai':'Moonshot AI', 'nousresearch':'Nous Research', 'nvidia':'NVIDIA Corporation',
+              'openai':'OpenAI', 'perplexity':'Perplexity AI', 'qwen':'Alibaba Cloud (Alibaba Group)',
+              'rekaai':'Reka AI', 'stepfun':'StepFun', 'tngtech':'TNG Technology Consulting',
+              'x-ai':'xAI', '~x-ai':'xAI', 'z-ai':'Z.ai / Zhipu AI'
+          }
+
+          token_keys = {
+              'prompt':'Input', 'completion':'Output', 'input_cache_read':'Cache read',
+              'input_cache_write':'Cache write', 'input_cache_write_1h':'Cache write (1h)',
+              'internal_reasoning':'Reasoning', 'input_audio_cache':'Audio cache input'
+          }
+
+          def money_per_million(v):
+              if v in (None, ''): return ''
+              return float(v) * 1_000_000
+
+          rows=[]
+          for m in models:
+              p=m.get('pricing') or {}
+              other=[]
+              for k,v in p.items():
+                  if k in token_keys or k in ('prompt','completion'):
+                      continue
+                  if v in (None,''):
+                      continue
+                  label=k.replace('_',' ')
+                  unit='native unit'
+                  if k in ('request','web_search'): unit='request'
+                  elif k in ('image','image_output'): unit='image'
+                  elif k in ('audio','audio_output'): unit='audio unit'
+                  other.append(f"{label}: ${float(v):g}/{unit}")
+              provider=(m.get('id') or '').split('/',1)[0]
+              created=m.get('created')
+              date=dt.datetime.fromtimestamp(created, tz=dt.timezone.utc).date().isoformat() if created else ''
+              rows.append({
+                  'Model Name':m.get('name',''),
+                  'OpenRouter Added Date':date,
+                  'Parent Company / Developer':parents.get(provider,''),
+                  'Input ($ / 1M tokens)':money_per_million(p.get('prompt')),
+                  'Output ($ / 1M tokens)':money_per_million(p.get('completion')),
+                  'Cache Read ($ / 1M tokens)':money_per_million(p.get('input_cache_read')),
+                  'Cache Write ($ / 1M tokens)':money_per_million(p.get('input_cache_write')),
+                  'Cache Write 1h ($ / 1M tokens)':money_per_million(p.get('input_cache_write_1h')),
+                  'Other Pricing':'; '.join(other),
+              })
+
+          out=Path('openrouter_model_catalog_2026-08-05.csv')
+          with out.open('w',newline='',encoding='utf-8-sig') as f:
+              w=csv.DictWriter(f,fieldnames=list(rows[0]))
+              w.writeheader(); w.writerows(rows)
+          print(f'wrote {len(rows)} rows')
+          PY
+      - name: Commit CSV
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add openrouter_model_catalog_2026-08-05.csv
+          git commit -m 'chore: add temporary OpenRouter catalog CSV' || exit 0
+          git push origin HEAD:tmp/openrouter-catalog-20260805
